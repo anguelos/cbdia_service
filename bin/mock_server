@@ -204,7 +204,7 @@ if __name__=="__main__":
         "page_width": 2000,
         "page_height": 3000,
         "pages_per_doc": 10,
-        "document_glob": "data/root/chronicles/*", """PYTHONPATH="./" ./bin/mock_server -document_glob '/data/archiv/public/chronicle/*/*'"""
+        "document_glob": ("data/root/chronicles/*", """PYTHONPATH="./" ./bin/mock_server -document_glob '/data/archiv/public/chronicle/*/*'""")
     }
     params, _ = fargv.fargv(params)
     cherrypy.config.update({'server.socket_port': params.port})
