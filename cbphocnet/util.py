@@ -7,7 +7,7 @@ from skimage.transform import resize
 import numpy as np
 from scipy.spatial.distance import cdist, pdist, squareform
 import tqdm
-import cv2
+#import cv2
 import io
 
 class HomographyAugmentation(object):
