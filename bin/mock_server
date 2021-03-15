@@ -44,7 +44,7 @@ class MockServer(object):
         self.page_nums = np.empty(params.nb_embeddings, dtype=np.short)
         self.doc_nums = np.empty(params.nb_embeddings, dtype=np.short)
         self.document_paths = np.array(glob.glob(params.document_glob))
-        self.document_names = np.array([name.split("/")[-1].split("-")[0] for name in self.document_paths.tolist()])
+        self.document_names = np.array([name.split("/")[-1].replace("soap-","").split("-")[0] for name in self.document_paths.tolist()])
         self.set_random_data(params)
         self.identity_idx = np.arange(0, params.nb_embeddings, dtype=np.long)
 
@@ -204,7 +204,7 @@ if __name__=="__main__":
         "page_width": 2000,
         "page_height": 3000,
         "pages_per_doc": 10,
-        "document_glob": "data/root/chronicles/*"
+        "document_glob": "data/root/chronicles/*", """PYTHONPATH="./" ./bin/mock_server -document_glob '/data/archiv/public/chronicle/*/*'"""
     }
     params, _ = fargv.fargv(params)
     cherrypy.config.update({'server.socket_port': params.port})
