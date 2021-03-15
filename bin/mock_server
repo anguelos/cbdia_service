@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import cbphocnet
 import fargv
 import string
@@ -189,20 +190,22 @@ N48CXF8m2iQ3YmmKqVlRtW4MLwWACH+H09wdGltaXplZCBieSBVbGVhZCBTbWFydFNhdmVyIQAAOw=="
 </html>
 """
 
-params = {
-    "phoc_chars": string.ascii_lowercase+string.digits,
-    "phoc_levels": [1, 2, 3, 4, 5],
-    "nb_embeddings": 100000,
-    "min_word_width": 50,
-    "max_word_width": 150,
-    "min_word_height": 50,
-    "max_word_height": 150,
-    "page_width": 2000,
-    "page_height": 3000,
-    "pages_per_doc": 10,
-    "document_glob": "data/root/chronicles/*"
-}
 
-params, _ = fargv.fargv(params)
-
-cherrypy.quickstart(MockServer(params))
+if __name__=="__main__":
+    params = {
+        "port": 8080,
+        "phoc_chars": string.ascii_lowercase+string.digits,
+        "phoc_levels": [1, 2, 3, 4, 5],
+        "nb_embeddings": 100000,
+        "min_word_width": 50,
+        "max_word_width": 150,
+        "min_word_height": 50,
+        "max_word_height": 150,
+        "page_width": 2000,
+        "page_height": 3000,
+        "pages_per_doc": 10,
+        "document_glob": "data/root/chronicles/*"
+    }
+    params, _ = fargv.fargv(params)
+    cherrypy.config.update({'server.socket_port': params.port})
+    cherrypy.quickstart(MockServer(params))
