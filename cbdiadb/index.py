@@ -3,10 +3,12 @@ import numpy as np
 import time
 import pickle
 import glob
+from collections import defaultdict
 
 from typing import Tuple, List
 from .hinttypes import t_filename, t_indexreply_ind, t_rect, t_optional_tensor, t_image, img_to_array, t_ctx
-from .embedder import AbstractStringImageEmbedder
+
+import os
 
 
 class AbstractIndex(object):
@@ -21,6 +23,9 @@ class AbstractIndex(object):
     @property
     def nb_documents(self):
         raise NotImplemented
+
+    def get_docname_reverse_index(self):
+        return {name: n for n, name in enumerate(self.docnames.tolist())}
 
     def search(self, query_embedding: np.array, ctx_docnames: t_ctx, max_occurence_per_document: int)->List:
         raise NotImplemented
@@ -49,7 +54,7 @@ class NumpyIndex(AbstractIndex):
     def __init__(self, nb_embeddings: int, embedding_size: int, nb_documents: int, metric:str, embedding_dtype=np.float16):
         assert metric in ["euclidean"]
         self.metric = metric
-        self.docnames = np.empty(nb_documents, dtype=str)
+        self.docnames = np.empty(nb_documents, dtype=object)
         self.idx = np.arange(nb_embeddings, dtype=int)
         self.embeddings = np.empty([nb_embeddings, embedding_size],dtype=embedding_dtype)
         self.doccodes = np.empty(nb_embeddings, dtype=int)
@@ -77,7 +82,7 @@ class NumpyIndex(AbstractIndex):
         self.embeddings = np.empty([self.nb_embeddings, embedding_size])
 
     def _reset_num_documents(self, nb_documents: int)->None:
-        self.docnames = np.empty(nb_documents, dtype=str)
+        self.docnames = np.empty(nb_documents, dtype=object)
 
     def _idx_to_response(self, idx=np.array)->List:
         docnames = self.docnames[self.doccodes[idx]].tolist()
@@ -86,9 +91,10 @@ class NumpyIndex(AbstractIndex):
         top = self.top[idx].tolist()
         right = self.right[idx].tolist()
         bottom = self.right[idx].tolist()
-        width = self.width[idx].tolist()
-        height = self.height[idx].tolist()
-        return zip(docnames, pagecodes, left, top, right, bottom, width, height)
+        width = self.image_widths[idx].tolist()
+        height = self.image_heights[idx].tolist()
+        res = list(zip(docnames, pagecodes, left, top, right, bottom, width, height))
+        return res
 
     def _context_to_idx(self, ctx_docnames: t_ctx)->np.array:
         if len(ctx_docnames) == 0:
@@ -102,7 +108,7 @@ class NumpyIndex(AbstractIndex):
         return idx
 
     def _retrieve_euclidean(self, query_embedding: np.array, ctx_docnames: t_ctx)->Tuple[np.array, np.array]:
-        ctx_idx = self.context_to_idx(ctx_docnames)
+        ctx_idx = self._context_to_idx(ctx_docnames)
         embeddings = self.embeddings[ctx_idx, :]
         reversed_ctx_idx = self.idx[ctx_idx]
         subtracted = embeddings - query_embedding
@@ -121,17 +127,18 @@ class NumpyIndex(AbstractIndex):
             occurence_count = (occurences.cumsum(axis=0) * occurences).sum(axis=1)
             return occurence_count <= max_responces_perdoc
 
-    def search(self, query_embedding: np.array, ctx_docnames: t_ctx, max_occurence_per_document: int)->List:
+    def search(self, query_embedding: np.array, ctx_docnames: t_ctx, max_responces:int, max_occurence_per_document: int)->List:
         if self.metric=="euclidean":
             responce_idx, similarity = self._retrieve_euclidean(query_embedding, ctx_docnames)
         else:
             raise NotImplementedError(self.metric)
+        responce_idx, similarity = responce_idx[max_responces], similarity[max_responces]
         filter_by_doc_occurences = self._generate_perdoc_occurence_limit(responce_idx, max_occurence_per_document)
         responce_idx, similarity = responce_idx[filter_by_doc_occurences], similarity[filter_by_doc_occurences]
         return self._idx_to_response(responce_idx)
 
     def save(self, path):
-        with open(path,"wb") as fd:
+        with open(path, "wb") as fd:
             data = {
                 "metric": self.metric,
                 "nb_embeddings": self.nb_embeddings,
@@ -165,8 +172,20 @@ class NumpyIndex(AbstractIndex):
         print("Creating random data ... ", end="")
         t = time.time()
         names = sorted([path[len(doc_root):] for path in glob.glob(doc_glob)])
-        for n in range(min(len(names), self.nb_documents)):
+        self._reset_num_documents(len(names))
+        for n in range(self.nb_documents):
             self.docnames[n] = names[n]
+
+        docids_pagenums = []
+        name_to_code = self.get_docname_reverse_index()
+        for path in glob.glob(doc_glob+"/*.jp2"):
+            doc_id = os.path.dirname(path)[len(doc_root):]
+            filename = os.path.basename(path)
+            page_num = filename.split(".")[0].split("!")[0].split("_")[-1]
+            page_num = int(page_num)
+            docids_pagenums.append((name_to_code[doc_id], page_num))
+        docids_pagenums = np.array(docids_pagenums)
+
         self.embeddings[:, :self.embedding_size//2] = np.random.rand(self.nb_embeddings, self.embedding_size//2)
         self.embeddings[:, self.embedding_size // 2:] = np.random.rand(self.nb_embeddings, self.embedding_size - self.embedding_size // 2)
         self.left = np.random.randint(0, page_width, self.nb_embeddings)
@@ -175,6 +194,10 @@ class NumpyIndex(AbstractIndex):
                                                                           self.nb_embeddings)
         self.bottom = self.top + np.random.randint(min_word_height,
                                                                           max_word_height, self.nb_embeddings)
-        self.doccodes = np.random.randint(0, min(len(names), self.nb_documents), self.nb_embeddings)
-        self.pagecodes = np.random.randint(0, pages_per_doc, self.nb_embeddings) * 10
+        self.image_widths[:] = page_width
+        self.image_heights[:] = page_height
+
+        pages = np.random.randint(0, min([docids_pagenums.shape[0], pages_per_doc]), self.nb_embeddings)
+        self.doccodes = docids_pagenums[pages, 0]
+        self.pagecodes = docids_pagenums[pages, 1]
         print("Done!")

@@ -3,81 +3,51 @@ import cbphocnet
 import fargv
 import string
 import cherrypy
-import json
-import glob
 from PIL import Image
 import numpy as np
-import time
 from io import BytesIO
 import base64
-
-#cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
+from cbdiadb import NumpyIndex
 
 
 class MockServer(object):
-    def set_random_data(self, params):
-        print("Creating random data ... ", end="")
-        t = time.time()
-        self.embeddings[:, :self.embedding_size//2] = np.random.rand(params.nb_embeddings, self.embedding_size//2)
-        self.embeddings[:, self.embedding_size // 2:] = np.random.rand(params.nb_embeddings, self.embedding_size - self.embedding_size // 2)
-        self.rects_ltrb[:, 0] = np.random.randint(0, params.page_width, params.nb_embeddings)
-        self.rects_ltrb[:, 1] = np.random.randint(0, params.page_height, params.nb_embeddings)
-        self.rects_ltrb[:, 2] = self.rects_ltrb[:, 0] + np.random.randint(params.min_word_width, params.max_word_width,
-                                                                          params.nb_embeddings)
-        self.rects_ltrb[:, 3] = self.rects_ltrb[:, 1] + np.random.randint(params.min_word_height,
-                                                                          params.max_word_height, params.nb_embeddings)
-        self.page_nums[:] = np.random.randint(0, params.pages_per_doc, params.nb_embeddings)
-        self.doc_nums[:] = np.random.randint(0, self.document_names.shape[0], params.nb_embeddings)
-        print(f"done! in {time.time()-t:5.3}")
-        print("Embeedings",self.embeddings.shape)
-        print("rects_ltrb", self.rects_ltrb.shape)
-        print("page_nums", self.page_nums.shape)
-        print("doc_nums", self.doc_nums.shape)
-
     def __init__(self, params):
         super().__init__()
         self.phoc_chars = params.phoc_chars
         self.phoc_levels = params.phoc_levels
-        self.embedding_size = sum(self.phoc_levels) * len(self.phoc_chars)
-        self.embeddings = np.empty([params.nb_embeddings, self.embedding_size], dtype=np.float32)
-        self.rects_ltrb = np.empty([params.nb_embeddings, 4], dtype=np.short)
-        self.page_nums = np.empty(params.nb_embeddings, dtype=np.short)
-        self.doc_nums = np.empty(params.nb_embeddings, dtype=np.short)
-        self.document_paths = np.array(glob.glob(params.document_glob))
-        self.document_names = np.array([name.split("/")[-1].replace("soap-","").split("-")[0] for name in self.document_paths.tolist()])
-        self.set_random_data(params)
-        self.identity_idx = np.arange(0, params.nb_embeddings, dtype=np.long)
+        embedding_size = sum(self.phoc_levels) * len(self.phoc_chars)
+        self.db = NumpyIndex(
+            nb_embeddings=params.nb_embeddings,embedding_size=embedding_size, nb_documents=1,metric="euclidean")
+        self.db.set_random_data(pages_per_doc=params.pages_per_doc, page_width=params.page_width,
+                                page_height=params.page_height,
+                                min_word_height=params.min_word_height, max_word_height=params.max_word_height,
+                                min_word_width=params.min_word_width, max_word_width=params.max_word_width,
+                                doc_glob=params.document_glob, doc_root=params.document_root)
 
-    def search(self, embedding, context=None):
-        print("Searching indexes ... ", end="")
-        t = time.time()
-        embedding = embedding.astype("float32")
-        if context is None:
-            idx = np.argsort(((self.embeddings - embedding) ** 2).sum(axis=1))
-        else:
-            context_idx = self.doc_nums == -1
-            for book_id in context:
-                context_idx = context_idx|(self.doc_nums == (np.where(self.document_names == book_id)[0][0]))
-            contextualised_embeddings = self.embeddings[context_idx, :]
-            contextualised_idx = np.argsort(((contextualised_embeddings - embedding) ** 2).sum(axis=1))
-            idx = self.identity_idx[context_idx][contextualised_idx] # todo(anguelos) check this out
-        print(f"done! in {time.time() - t:5.3}")
-        return idx
-
-    def format_replies(self, idx):
-        rectangles = [[self.document_names[self.doc_nums[n]],self.page_nums[n]]+self.rects_ltrb[n, :].tolist() for n in
-                      idx.tolist()]
-        rectangles = [[r[0], int(r[1]), int(r[2]), int(r[3]), int(r[4]), int(r[5])] for r in rectangles]
-        return {"rectangles": rectangles}
+    def format_replies(self, responces):
+        return {"rectangles": responces}
 
     @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
     def searchword(self):
-        cl = cherrypy.request.headers['Content-Length']
-        rawbody = cherrypy.request.body.read(int(cl))
-        body = json.loads(rawbody)
-        # do_something_with(body)
-        print(repr(body))
-        return f"Updated {body}."
+        print("SEARCHWORD BEGIN")
+        query = cherrypy.request.json
+        if "q_str" in query["query"]:
+            embedding = cbphocnet.build_phoc_descriptor([query["query"]["q_str"]], params.phoc_chars, params.phoc_levels)
+        elif "q_img" in query["query"]:
+            embedding = cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
+        elif "q_ref" in query["query"]:
+            embedding = cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
+        else:
+            embedding = cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
+        print("SEARCH:", repr(query))
+        responce_idx = self.search(embedding)
+        responces = self.format_replies(responce_idx)
+        print("SEARCHWORD END")
+        return responces
+
+
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -85,9 +55,11 @@ class MockServer(object):
     def qbs(self):
         query = cherrypy.request.json
         embedding = cbphocnet.build_phoc_descriptor([query["q_str"]], params.phoc_chars, params.phoc_levels)
-        responce_idx = self.search(embedding)
-        responces = self.format_replies(responce_idx)
-        return responces
+        ctx_docnames = query.get("doc_ids", [])
+        max_occurence_per_document = query.get("rectangles_per_documnet", -1)
+        max_responces = query.get("max_rectangles", 10000)
+        responces = self.db.search(embedding, ctx_docnames=ctx_docnames, max_responces=max_responces, max_occurence_per_document=max_occurence_per_document)
+        return {"rectangles": responces}
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -96,7 +68,7 @@ class MockServer(object):
         query = cherrypy.request.json
         img=Image.open(BytesIO(base64.b64decode(query["q_img"])))
         img.save("/tmp/query.png")
-        embedding = np.random.rand(1,self.embedding_size)
+        embedding = np.random.rand(1, self.db.embedding_size)
         responce_idx = self.search(embedding)
         responces = self.format_replies(responce_idx)
         return responces
@@ -117,8 +89,8 @@ class MockServer(object):
     @cherrypy.tools.json_in()
     def qbr(self):
         query = cherrypy.request.json
-        embedding = np.random.rand(1, self.embedding_size)
-        responce_idx = self.search(embedding)
+        embedding = np.random.rand(1, self.db.embedding_size)
+        responce_idx = self.db.search(embedding)
         responces = self.format_replies(responce_idx)
         return responces
 
@@ -172,11 +144,26 @@ function DebugQBE() {
       dataType: "image/png"
     });
 }
-
-
+function UpdateQBR() {
+    $.ajax({
+      type: 'POST',
+      url: "qbr",
+      contentType: "application/json",
+      processData: false,
+      data: $('#qbrbox').val(),
+      success: function(data) {alert(data);},
+      dataType: "application/json"
+    });
+}
 </script>
 <body>
-<input type='textbox' id='searchwordbox' value='{}' size='20' />
+<input type='textbox' id='searchwordbox' value='{
+  "doc_ids": ["ch_00001_mesto"],
+  "query":{"q_str":"hello"}
+  "rectangles_per_documnet": 100,
+  "max_rectangles": 20000
+}
+' size='50' />
 <input type='submit' value='SearchWord' onClick='UpdateSearchWord(); return false' />
 <hr>
 <input type='textbox' id='qbsbox' value='{"q_str":"hello"}' size='20' />
@@ -186,25 +173,35 @@ function DebugQBE() {
 N48CXF8m2iQ3YmmKqVlRtW4MLwWACH+H09wdGltaXplZCBieSBVbGVhZCBTbWFydFNhdmVyIQAAOw=="}' size='20' />
 <input type='submit' value='Query By Example' onClick='UpdateQBE(); return false' />
 <input type='submit' value='Rotate Image' onClick='DebugQBE(); return false' />
+<hr>
+<input type='textbox' id='qbrbox' value='{"q_ref":{"doc_id":"ch_00001_mesto",
+        "page_num":11,
+        "left":700,
+        "top":500,
+        "right":900,
+        "bottom":600}}}' size='50' />
+<input type='submit' value='Query By Image Reference' onClick='UpdateQBR(); return false' />
 </body>
 </html>
 """
 
-
 if __name__=="__main__":
     params = {
         "port": 8080,
-        "phoc_chars": string.ascii_lowercase+string.digits,
+        "phoc_chars": string.ascii_lowercase + string.digits,
         "phoc_levels": [1, 2, 3, 4, 5],
         "nb_embeddings": 100000,
         "min_word_width": 50,
-        "max_word_width": 150,
-        "min_word_height": 50,
+        "max_word_width": 300,
+        "min_word_height": 40,
         "max_word_height": 150,
         "page_width": 2000,
         "page_height": 3000,
         "pages_per_doc": 10,
-        "document_glob": ("data/root/chronicles/*", """PYTHONPATH="./" ./bin/mock_server -document_glob '/data/archiv/public/chronicle/*/*'""")
+        "document_glob": ("./data/mirror_root/*/*/*",
+                          """PYTHONPATH="./" ./bin/mock_server -document_glob '/data/archiv/public/chronicle/*/*'"""),
+        "document_root": ("./data/mirror_root/",
+                          """PYTHONPATH="./" ./bin/mock_server -document_root '/data/archiv/public/chronicle'""")
     }
     params, _ = fargv.fargv(params)
     cherrypy.config.update({'server.socket_port': params.port})
