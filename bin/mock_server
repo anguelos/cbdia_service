@@ -19,7 +19,7 @@ class MockServer(object):
         self.phoc_levels = params.phoc_levels
         embedding_size = sum(self.phoc_levels) * len(self.phoc_chars)
         self.db = NumpyIndex(
-            nb_embeddings=params.nb_embeddings,embedding_size=embedding_size, nb_documents=1,metric="euclidean")
+            nb_embeddings=params.nb_embeddings,embedding_size=embedding_size, nb_documents=1, metric="euclidean")
         self.db.set_random_data(max_documents=params.max_documents, page_width=params.page_width,
                                 page_height=params.page_height,
                                 min_word_height=params.min_word_height, max_word_height=params.max_word_height,
@@ -32,6 +32,8 @@ class MockServer(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def searchword(self):
+        if cherrypy.request.method == 'OPTIONS':
+            return {}
         query_params = cherrypy.request.json
         query = query_params["query"]
         print("search word query:", query)
@@ -55,6 +57,8 @@ class MockServer(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def qbs(self):
+        if cherrypy.request.method == 'OPTIONS':
+            return {}
         query = cherrypy.request.json
         embedding = cbphocnet.build_phoc_descriptor([query["q_str"]], params.phoc_chars, params.phoc_levels)
         ctx_docnames = query.get("doc_ids", [])
@@ -67,6 +71,8 @@ class MockServer(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def qbe(self):
+        if cherrypy.request.method == 'OPTIONS':
+            return {}
         query = cherrypy.request.json
         img=Image.open(BytesIO(base64.b64decode(query["q_img"])))
         img.save("/tmp/query.png")
@@ -92,9 +98,10 @@ class MockServer(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def qbr(self):
+        if cherrypy.request.method == 'OPTIONS':
+            return {}
         print("QBR SATRTING!")
         query = cherrypy.request.json
-        #page_glob = f"{self.doc_root}{query['query']['q_ref']['page_num']}/*_*_{query['query']['q_ref']['page_num']:04}*.jp2"
         page_glob = f"{self.doc_root}{query['query']['q_ref']['page_num']}/*_*_{query['query']['q_ref']['page_num']:04}*.jp2"
         page_path = glob.glob(page_glob)[0]
         bbox = [query['query']['q_ref']["left"],
