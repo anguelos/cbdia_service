@@ -25,7 +25,7 @@ class AbstractIndex(object):
         raise NotImplemented
 
     def get_docname_reverse_index(self):
-        return {name: n for n, name in enumerate(self.docnames.tolist())}
+        return {name: n for n, name in enumerate(sorted(self.docnames.tolist()))}
 
     def search(self, query_embedding: np.array, ctx_docnames: t_ctx, max_occurence_per_document: int)->List:
         raise NotImplemented
@@ -100,15 +100,16 @@ class NumpyIndex(AbstractIndex):
         if len(ctx_docnames) == 0:
             idx = np.ones(self.nb_embeddings, dtype=np.bool)
         else:
+            rev_idx = self.get_docname_reverse_index()  # todo(anguelos) cache reverse index
             idx = np.zeros(self.nb_embeddings, dtype=np.bool)
-            for docname in ctx_docnames:
-                doccodes = np.nonzero(self.docnames == docname)[0]
-                assert len(doccodes) == 1
-                idx = idx | self.doccodes == doccodes[0]
+            for ctx_docname in ctx_docnames:
+                idx = idx | (self.doccodes == rev_idx[ctx_docname])
         return idx
 
     def _retrieve_euclidean(self, query_embedding: np.array, ctx_docnames: t_ctx)->Tuple[np.array, np.array]:
         ctx_idx = self._context_to_idx(ctx_docnames)
+        print("ctx_idx.shape", ctx_idx.shape)
+        print("ctx_idx.sum()", ctx_idx.sum())
         embeddings = self.embeddings[ctx_idx, :]
         reversed_ctx_idx = self.idx[ctx_idx]
         subtracted = embeddings - query_embedding
@@ -118,23 +119,30 @@ class NumpyIndex(AbstractIndex):
         return response_idx, similarity
 
     def _generate_perdoc_occurence_limit(self, response_idx:np.array, max_responces_perdoc:int)->np.array:
-        if max_responces_perdoc <=0 :
-            return np.ones(response_idx.shape, dtype=np.bool)
+        print("max_respoces:",max_responces_perdoc)
+        if max_responces_perdoc <=0:
+            print("response_idx.shape", response_idx.shape)
+            filter = np.ones(response_idx.shape, dtype=np.bool)
+            print("filter.shape", filter.shape)
         else:
             response_doccodes = self.doccodes[response_idx]
             occurences = np.zeros([response_idx.shape[0], self.docnames.shape[0]])
             occurences[np.arange(response_idx.shape[0], dtype=int), response_doccodes] = 1
             occurence_count = (occurences.cumsum(axis=0) * occurences).sum(axis=1)
-            return occurence_count <= max_responces_perdoc
+            filter = occurence_count <= max_responces_perdoc
+        return filter
 
     def search(self, query_embedding: np.array, ctx_docnames: t_ctx, max_responces:int, max_occurence_per_document: int)->List:
         if self.metric=="euclidean":
             responce_idx, similarity = self._retrieve_euclidean(query_embedding, ctx_docnames)
         else:
             raise NotImplementedError(self.metric)
-        responce_idx, similarity = responce_idx[max_responces], similarity[max_responces]
+        print("responce1:", responce_idx)
+        responce_idx, similarity = responce_idx[:max_responces], similarity[:max_responces]
         filter_by_doc_occurences = self._generate_perdoc_occurence_limit(responce_idx, max_occurence_per_document)
+        print("filter:",filter_by_doc_occurences)
         responce_idx, similarity = responce_idx[filter_by_doc_occurences], similarity[filter_by_doc_occurences]
+        print("responce2:", responce_idx)
         return self._idx_to_response(responce_idx)
 
     def save(self, path):
@@ -168,22 +176,24 @@ class NumpyIndex(AbstractIndex):
         result.idx = np.arange(result.nb_embeddings, dtype=int)
         return result
 
-    def set_random_data(self, pages_per_doc, page_width, page_height, min_word_height, max_word_height, min_word_width, max_word_width, doc_glob, doc_root):
+    def set_random_data(self, max_documents, page_width, page_height, min_word_height, max_word_height, min_word_width, max_word_width, doc_glob, doc_root):
         print("Creating random data ... ", end="")
         t = time.time()
         names = sorted([path[len(doc_root):] for path in glob.glob(doc_glob)])
+        names = names[:max_documents]
         self._reset_num_documents(len(names))
         for n in range(self.nb_documents):
             self.docnames[n] = names[n]
 
         docids_pagenums = []
         name_to_code = self.get_docname_reverse_index()
-        for path in glob.glob(doc_glob+"/*.jp2"):
-            doc_id = os.path.dirname(path)[len(doc_root):]
-            filename = os.path.basename(path)
-            page_num = filename.split(".")[0].split("!")[0].split("_")[-1]
-            page_num = int(page_num)
-            docids_pagenums.append((name_to_code[doc_id], page_num))
+        for doc in names:
+            for path in glob.glob(doc_root+doc+"/*.jp2"):
+                doc_id = os.path.dirname(path)[len(doc_root):]
+                filename = os.path.basename(path)
+                page_num = filename.split(".")[0].split("!")[0].split("_")[-1]
+                page_num = int(page_num)
+                docids_pagenums.append((name_to_code[doc_id], page_num))
         docids_pagenums = np.array(docids_pagenums)
 
         self.embeddings[:, :self.embedding_size//2] = np.random.rand(self.nb_embeddings, self.embedding_size//2)
@@ -197,7 +207,12 @@ class NumpyIndex(AbstractIndex):
         self.image_widths[:] = page_width
         self.image_heights[:] = page_height
 
-        pages = np.random.randint(0, min([docids_pagenums.shape[0], pages_per_doc]), self.nb_embeddings)
+        pages = np.random.randint(0, docids_pagenums.shape[0], self.nb_embeddings)
+        print("name_to_code", name_to_code)
+        print("pages", np.unique(pages))
+        print("docids_pagenums:", np.unique(docids_pagenums[:, 0]))
         self.doccodes = docids_pagenums[pages, 0]
+        print("doccodes", self.doccodes)
         self.pagecodes = docids_pagenums[pages, 1]
+        print("pagecodes", self.pagecodes)
         print("Done!")

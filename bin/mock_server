@@ -8,6 +8,7 @@ import numpy as np
 from io import BytesIO
 import base64
 from cbdiadb import NumpyIndex
+import glob
 
 
 class MockServer(object):
@@ -18,35 +19,35 @@ class MockServer(object):
         embedding_size = sum(self.phoc_levels) * len(self.phoc_chars)
         self.db = NumpyIndex(
             nb_embeddings=params.nb_embeddings,embedding_size=embedding_size, nb_documents=1,metric="euclidean")
-        self.db.set_random_data(pages_per_doc=params.pages_per_doc, page_width=params.page_width,
+        self.db.set_random_data(max_documents=params.max_documents, page_width=params.page_width,
                                 page_height=params.page_height,
                                 min_word_height=params.min_word_height, max_word_height=params.max_word_height,
                                 min_word_width=params.min_word_width, max_word_width=params.max_word_width,
                                 doc_glob=params.document_glob, doc_root=params.document_root)
+        self.doc_root = params.document_glob
 
-    def format_replies(self, responces):
-        return {"rectangles": responces}
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def searchword(self):
-        print("SEARCHWORD BEGIN")
-        query = cherrypy.request.json
-        if "q_str" in query["query"]:
-            embedding = cbphocnet.build_phoc_descriptor([query["query"]["q_str"]], params.phoc_chars, params.phoc_levels)
-        elif "q_img" in query["query"]:
+        query_params = cherrypy.request.json
+        query = query_params["query"]
+        print("search word query:", query)
+        ctx_docnames = query_params.get("doc_ids", [])
+        max_occurence_per_document = query_params.get("rectangles_per_document", -1)
+        max_responces = query_params.get("max_rectangles", 10000)
+        if "q_str" in query:
+            embedding = cbphocnet.build_phoc_descriptor([query["q_str"]], params.phoc_chars, params.phoc_levels)
+        elif "q_img" in query:
             embedding = cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
-        elif "q_ref" in query["query"]:
+        elif "q_ref" in query:
             embedding = cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
         else:
-            embedding = cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
-        print("SEARCH:", repr(query))
-        responce_idx = self.search(embedding)
-        responces = self.format_replies(responce_idx)
-        print("SEARCHWORD END")
-        return responces
-
+            raise ValueError
+            #embedding = cbphocnet.build_phoc_descriptor(["hello"], params.phoc_chars, params.phoc_levels)
+        responces = self.db.search(embedding, ctx_docnames=ctx_docnames, max_responces=max_responces, max_occurence_per_document=max_occurence_per_document)
+        return {"rectangles": responces}
 
 
     @cherrypy.expose
@@ -56,7 +57,7 @@ class MockServer(object):
         query = cherrypy.request.json
         embedding = cbphocnet.build_phoc_descriptor([query["q_str"]], params.phoc_chars, params.phoc_levels)
         ctx_docnames = query.get("doc_ids", [])
-        max_occurence_per_document = query.get("rectangles_per_documnet", -1)
+        max_occurence_per_document = query.get("rectangles_per_document", -1)
         max_responces = query.get("max_rectangles", 10000)
         responces = self.db.search(embedding, ctx_docnames=ctx_docnames, max_responces=max_responces, max_occurence_per_document=max_occurence_per_document)
         return {"rectangles": responces}
@@ -69,9 +70,11 @@ class MockServer(object):
         img=Image.open(BytesIO(base64.b64decode(query["q_img"])))
         img.save("/tmp/query.png")
         embedding = np.random.rand(1, self.db.embedding_size)
-        responce_idx = self.search(embedding)
-        responces = self.format_replies(responce_idx)
-        return responces
+        ctx_docnames = query.get("doc_ids", [])
+        max_occurence_per_document = query.get("rectangles_per_document", -1)
+        max_responces = query.get("max_rectangles", 10000)
+        responces = self.db.search(embedding, ctx_docnames=ctx_docnames, max_responces=max_responces, max_occurence_per_document=max_occurence_per_document)
+        return {"rectangles": responces}
 
     @cherrypy.expose
     @cherrypy.tools.json_in()
@@ -88,11 +91,24 @@ class MockServer(object):
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def qbr(self):
+        print("QBR SATRTING!")
         query = cherrypy.request.json
+        #page_glob = f"{self.doc_root}{query['query']['q_ref']['page_num']}/*_*_{query['query']['q_ref']['page_num']:04}*.jp2"
+        page_glob = f"{self.doc_root}{query['query']['q_ref']['page_num']}/*_*_{query['query']['q_ref']['page_num']:04}*.jp2"
+        page_path = glob.glob(page_glob)[0]
+        bbox = [query['query']['q_ref']["left"],
+                query['query']['q_ref']["top"],
+                query['query']['q_ref']["right"],
+                query['query']['q_ref']["bottom"]]
+        img = Image.open(page_path).crop(bbox)
+        img.save("/tmp/qbr.png")
         embedding = np.random.rand(1, self.db.embedding_size)
-        responce_idx = self.db.search(embedding)
-        responces = self.format_replies(responce_idx)
-        return responces
+        ctx_docnames = query.get("doc_ids", [])
+        max_occurence_per_document = query.get("rectangles_per_document", -1)
+        max_responces = query.get("max_rectangles", 10000)
+        responces = self.db.search(embedding, ctx_docnames=ctx_docnames, max_responces=max_responces, max_occurence_per_document=max_occurence_per_document)
+        return {"rectangles": responces}
+
 
     @cherrypy.expose
     def index(self):
@@ -157,13 +173,7 @@ function UpdateQBR() {
 }
 </script>
 <body>
-<input type='textbox' id='searchwordbox' value='{
-  "doc_ids": ["ch_00001_mesto"],
-  "query":{"q_str":"hello"}
-  "rectangles_per_documnet": 100,
-  "max_rectangles": 20000
-}
-' size='50' />
+<input type='textbox' id='searchwordbox' value='{"doc_ids": ["chronicle/soap-ch/soap-ch_00518_skola-skalna-1844-1870"],"query":{"q_str":"hello"},"rectangles_per_document": 100,"max_rectangles": 20000}' size='50' />
 <input type='submit' value='SearchWord' onClick='UpdateSearchWord(); return false' />
 <hr>
 <input type='textbox' id='qbsbox' value='{"q_str":"hello"}' size='20' />
@@ -174,12 +184,7 @@ N48CXF8m2iQ3YmmKqVlRtW4MLwWACH+H09wdGltaXplZCBieSBVbGVhZCBTbWFydFNhdmVyIQAAOw=="
 <input type='submit' value='Query By Example' onClick='UpdateQBE(); return false' />
 <input type='submit' value='Rotate Image' onClick='DebugQBE(); return false' />
 <hr>
-<input type='textbox' id='qbrbox' value='{"q_ref":{"doc_id":"ch_00001_mesto",
-        "page_num":11,
-        "left":700,
-        "top":500,
-        "right":900,
-        "bottom":600}}}' size='50' />
+<input type='textbox' id='qbrbox' value='{"q_ref":{"doc_id":"ch_00001_mesto", "page_num":11, "left":700, "top":500, "right":900, "bottom":600}}}' size='50' />
 <input type='submit' value='Query By Image Reference' onClick='UpdateQBR(); return false' />
 </body>
 </html>
@@ -197,7 +202,7 @@ if __name__=="__main__":
         "max_word_height": 150,
         "page_width": 2000,
         "page_height": 3000,
-        "pages_per_doc": 10,
+        "max_documents": 10,
         "document_glob": ("./data/mirror_root/*/*/*",
                           """PYTHONPATH="./" ./bin/mock_server -document_glob '/data/archiv/public/chronicle/*/*'"""),
         "document_root": ("./data/mirror_root/",
