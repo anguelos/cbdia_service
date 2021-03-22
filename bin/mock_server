@@ -2,6 +2,7 @@
 import cbphocnet
 import fargv
 import string
+import cherrypy_cors
 import cherrypy
 from PIL import Image
 import numpy as np
@@ -209,5 +210,15 @@ if __name__=="__main__":
                           """PYTHONPATH="./" ./bin/mock_server -document_root '/data/archiv/public/chronicle'""")
     }
     params, _ = fargv.fargv(params)
-    cherrypy.config.update({'server.socket_port': params.port})
+    cherrypy_cors.install()
+    cherrypy.config.update({
+        'tools.response_headers.on': True,
+        'tools.response_headers.headers': [('Access-Control-Allow-Origin', 'http://test2.portafontium.eu'),
+            ('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS,POST,PUT'),
+            ('Access-Control-Allow-Headers', 'Access-Control-Allow-Headers, Origin,Accept, Session, X-Requested-With, Content-Type, Access-Control-Request-Method, Access-Control-Request-Headers')],
+        #, ('Access-Control-Allow-Headers', 'Content-Type')],
+        'cors.expose.on': True,
+        'server.socket_host': '0.0.0.0',
+        'server.socket_port': params.port
+    })
     cherrypy.quickstart(MockServer(params))

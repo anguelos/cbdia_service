@@ -1,6 +1,7 @@
 numpy~=1.19.1
 fargv
 cherrypy
+cherrypy_cors
 torch~=1.6.0
 Pillow~=6.2.2
 jsonschema~=2.6.0
